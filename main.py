@@ -1,16 +1,27 @@
 import logging
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler,ConversationHandler,PollAnswerHandler
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, ParseMode, ReplyKeyboardRemove
+import telegram
 import os
 import sys
-import telegram
 import mysql.connector
 import json
 from datetime import datetime
 from datetime import timedelta
 import pytz
+import bbdd as db
+from math import ceil
 
-
+# TODO crear funcionalidad para crear un jugador externo. idea tener una sequencia en la base de datos para crear esos id.
+# TODO crear funcionalidad parar inscribir y desinscribir otros jugadores ya inscriptos.
+# TODO Crear funcionalidad para cargar de que equipo fue cada jugador en un partido.
+# TODO crear funcionalidad para que se anote el equipo ganador y la diferencia de goles 
+# TODO crear funcionalidad para dar de baja un partido como ya jugado
+# TODO crear funcionalidad para que cada uno anote sus goles
+# TODO crear funcionalidad para dar estadísticas de partidos ganados y goles
+# TODO averiguar como hacer para largar mensajes automáticos y de este modo 2 cosas: que se habilite un partido automáticamente y que a la noche verifique baneados y partidos ya jugados los desactive.
+# TODO al final recordar hacer el listado de funciones en fatherbot
+# TODO agregar a cada funcion su "info" - Agregar emoticones si se puede!
 
 
 
@@ -48,8 +59,8 @@ else:
     logger.info('No se especificó el MODE')
     sys.exit()
 
-
-# auxiliares:
+#------------------------------------------------------------------------------------------------------
+# utils:
 
 map_weekday = {
     'l':0, 'lu':0,'lun': 0, 'lunes': 0, 'lune':0,
@@ -71,7 +82,7 @@ map_weekday_2 = {
     6: 'domingo'
     }
 
-def calculate_date_new_game(string_weekday,weeks):
+def calculate_date(string_weekday,weeks):
     today = datetime.now(pytz.timezone('America/Argentina/Mendoza')).date()
 
     if weeks > 0:
@@ -85,146 +96,26 @@ def calculate_date_new_game(string_weekday,weeks):
     return date_new_game
 
 
-def connect(mode):
-    if mode == 'dev':
-        # Conexión a BBDD
-        with open('var_entorno.json','r') as vars_ent:
-            vars_ent_json = json.loads(vars_ent.read())
-
-        mydb = mysql.connector.connect(host=vars_ent_json['HOSTNAME_DB'],
-                    user=vars_ent_json['USERNAME_DB'],
-                    passwd=vars_ent_json['PASSWORD_DB'],
-                    db=vars_ent_json['DBNAME_DB'],
-                    port=vars_ent_json['PORT_DB'])
-        return mydb
-    elif mode== 'prod':
-        # Conexión a BBDD
-        mydb = mysql.connector.connect(host=os.getenv('HOSTNAME_DB'),
-                    user=os.getenv('USERNAME_DB'),
-                    passwd=os.getenv('PASSWORD_DB'),
-                    db=os.getenv('DBNAME_DB'),
-                    port=os.getenv('PORT_DB'))
-        return mydb
-    else:
-        raise 'Mode is not defined'
-
-def insert_new_game(date,time,n_jugadores):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    sql = "INSERT INTO games (date, hour, active, players_per_team) VALUES (%s, %s, %s, %s)"
-    val = (date, time,True, n_jugadores)
-    mycursor.execute(sql, val)
-    mydb.commit()
-    mydb.close()
-
-def get_games_active():
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    mycursor.execute("SELECT id, date, hour, players_per_team FROM games WHERE active is true")
-    myresult = mycursor.fetchall()
-    mydb.close()
-    return myresult
-
-def insert_new_player(id_player, first_name, last_name):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    sql = f"INSERT INTO players (id, first_name, last_name) VALUES (%s, %s, %s)"
-    val = (id_player, first_name, last_name)
-    try:
-        mycursor.execute(sql, val)
-        mydb.commit()
-    except:
-        pass
-    mydb.close()
-
-def alter_alias_player(id_player, alias):
-    pass
-
-def insert_player_in_game(id_player, id_game, headline):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    sql = f"INSERT INTO players_games (player_id, game_id, headline) VALUES (%s, %s, %s)"
-    val = (id_player, id_game, headline)
-    mycursor.execute(sql, val)
-    mydb.commit()
-    mydb.close()
-
-def check_exist_ban_player(id_player):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    mycursor.execute(f"SELECT id, until_ban_date FROM players WHERE id = {id_player}")
-    myresult = mycursor.fetchone()
-    if myresult!= None:
-        exist = True
-        if myresult[1] == None:
-            ban = False
-        else:
-            date_ban = datetime.strptime(str(myresult[1]), '%Y-%m-%d')
-            dif_date = datetime.now(pytz.timezone('America/Argentina/Mendoza')).date() - date_ban
-            if dif_date > 0:
-                ban = True
-                date_ban = date_ban.strftime('%d/%m/%Y')
-            else:
-                ban = False
-                date_ban = None
-                down_ban(id_player)
-    else:
-        exist = False
-        ban = None
-        date_ban = False
-    mydb.close()
-    return {'exist': exist, 'ban': ban, 'date_ban': date_ban}
-
-def get_players_game(id_game):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    mycursor.execute(f"SELECT pg.player_id, p.first_name, p.last_name, p.alias, pg.headline FROM players_games pg LEFT JOIN players p ON p.id = pg.player_id WHERE pg.game_id = {id_game}")
-    myresult = mycursor.fetchall()
-    mydb.close()
-    return myresult
-
-def get_game_info(id_game):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    mycursor.execute(f"SELECT id, date, hour, players_per_team FROM games WHERE id = {id_game}")
-    myresult = mycursor.fetchone()
-    mydb.close()
-    return myresult
-
-def ban_player(id_player,date):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    sql = f"UPDATE players SET until_ban_date = %s WHERE id = %s;"
-    val = (date ,id_player)
-    mycursor.execute(sql, val)
-    mydb.commit()
-    mydb.close()
-
-def get_ban_players():
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    mycursor.execute("SELECT id, first_name, last_name, alias, until_ban_date FROM players WHERE until_ban_date is not null")
-    myresult = mycursor.fetchall()
-    mydb.close()
-    return myresult
-
-def down_ban(id_player):
-    mydb = connect(os.getenv("MODE"))
-    mycursor = mydb.cursor()
-    sql = f"UPDATE players SET until_ban_date = null WHERE id = %s;"
-    val = (id_player)
-    mycursor.execute(sql, val)
-    mydb.commit()
-    mycursor.execute(f"SELECT id, first_name, last_name, alias, until_ban_date FROM players WHERE id = {id_player}")
-    myresult = mycursor.fetchone()
-    mydb.close()
-    return myresult
-
 def headline(headline_bool):
+    if headline_bool: 
+        return 'T' 
+    else: 
+        return 'S'
+
+def headline_long(headline_bool):
     if headline_bool: 
         return 'titular' 
     else: 
         return 'suplente'
+
+def par(number):
+    return number % 2 == 0
+
+def calculate_need_votes(n_members):
+    if par(n_members):
+        return int(n_members/2 + 1)
+    else:
+        return int(ceil(need_votes/2))
 
 # --------------------------------------------------------------------------------------------------------------------------------
 # Handlers:
@@ -299,7 +190,7 @@ def creategame(update, context):
                 update.message.reply_text('La cantidad de jugadores por partido debe ser un número.')
                 return 
 
-            date_new_game = calculate_date_new_game(split_cod[0].lower(),semanas)
+            date_new_game = calculate_date(split_cod[0].lower(),semanas)
 
             if date_new_game == False:
                 update.message.reply_text('Estás creando un partido en una fecha que ya paso!. Intenta de nuevo.')
@@ -309,8 +200,8 @@ def creategame(update, context):
             time = horario + ":00:00"
             weekday = map_weekday_2[date_new_game.weekday()]
             try:
-                insert_new_game(date, time, n_jugadores)
-                update.message.reply_text(f"{update.effective_user.mention_html()} ha creado un partido el día {weekday.capitalize()} {date_new_game.strftime('%d/%m/%Y')} a las {time[:5]}hs!",parse_mode=ParseMode.HTML)
+                db.insert_new_game(date, time, n_jugadores)
+                update.message.reply_text(f"{update.effective_user.mention_html()} ha creado un partido el día {weekday.capitalize()} de {n_jugadores}vs{n_jugadores} {date_new_game.strftime('%d/%m/%Y')} a las {time[:5]}hs!",parse_mode=ParseMode.HTML)
             except:
                 update.message.reply_text('Hubo algún error al crear el partido, intenta de nuevo.')
         except:
@@ -326,7 +217,7 @@ def games(update, context):
 Aparecerá el ID, que es importante cuando hay más de un partido activo ya que tendrás que especificarlo al anotarte\.""",parse_mode='MarkdownV2')
         return
 
-    games_active = get_games_active()
+    games_active = db.get_games_active()
 
     if len(games_active) > 0:
         respuesta = 'Partidos activos: \n'
@@ -348,27 +239,38 @@ def _insert_player(update, context):
     first_name = update.effective_user['first_name']
     last_name = update.effective_user['last_name'] 
     
-    insert_new_player(id_user,first_name,last_name)
+    db.insert_new_player(id_user,first_name,last_name)
 
 def annotate(update, context):
     args = context.args
 
     id_user = update.effective_user['id']
-    exist_ban = check_exist_ban_player(id_user)
+    exist_ban = db.check_exist_ban_player(id_user)
+    message_id = update.message['message_id']
 
     if exist_ban['exist'] == False:
         _insert_player(update, context)
     elif exist_ban['ban'] == True:
-        date_ban = date_ban['date_ban']
+        date_ban = exist_ban['date_ban']
         update.message.reply_text(f'Estás ¡¡BAN!! hasta el {date_ban}')
         return
 
     if len(args) == 1:
         # try:
         id_game = args[0]
-        players = get_players_game(id_game)
+        game_info = db.get_game_info(id_game)
+
+        if game_info == None:
+            update.message.reply_text(f'El partido con ID {id_game} no existe.')
+            return
+
+        if game_info[4] == 0:
+            update.message.reply_text(f'El partido con ID {id_game} no está activo.')
+            return
+
+        players = db.get_players_game(id_game)
         q_annotated = len(players)
-        game_info = get_game_info(id_game)
+        game_info = db.get_game_info(id_game)
         game_players = int(game_info[3]) * 2
         if q_annotated < game_players:
             headline = True
@@ -380,13 +282,14 @@ def annotate(update, context):
             
             
     elif len(args) == 0:
-        games_active = get_games_active()
+        games_active = db.get_games_active()
         # print(games_active)
         if len(games_active) == 1:
             game_info = games_active[0]
             id_game = game_info[0]
+
             game_players = int(game_info[3]) * 2
-            players = get_players_game(id_game)
+            players = db.get_players_game(id_game)
             q_annotated = len(players)
 
             if q_annotated < game_players:
@@ -399,45 +302,80 @@ def annotate(update, context):
             return
     
     else:
-        update.message.reply_text('No debe pasar ningún argumento en caso de que haya solo 1 partido activo para anotarse o el id del partido al que se quiere anotar.')
+        update.message.reply_text('Debe pasar el ID del partido a anotarse, en caso de que solo haya 1 activo, no hace falta pasarlo')
         return
 
     try:
-        insert_player_in_game(id_user, id_game, headline)
+        db.insert_player_in_game(id_user, id_game, headline, message_id)
     except:
         update.message.reply_text('Ya estás anotado en el partido!')
         return
 
     date_game = datetime.strptime(str(game_info[1]), '%Y-%m-%d')
     weekday = map_weekday_2[date_game.weekday()]
-    update.message.reply_text(f"{update.effective_user.mention_html()} se ha anotado al partido del {weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game_info[2])[:5]}hs!",parse_mode=ParseMode.HTML)
+    update.message.reply_text(f"{update.effective_user.mention_html()} se ha anotado al partido del {weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game_info[2])[:5]}hs como {headline_long(headline)}!",parse_mode=ParseMode.HTML)
 
 def annotated(update, context):
-    # args = context.args
+    
+    id_games = context.args
+    if id_games != []:
+        try:
+            for id_game in id_games:
+                int(id_game)
+        except:
+            update.message.reply_text("Debes pasar los ID de los partidos. Si no pasas ningun ID los inscriptos a todos los partidos.")
+            return
         
-    games_active = get_games_active()
+        games_active = []
+        for id_game in id_games:
+            # eliminamos los partidos que no están activos
+            game = db.get_game_info(id_game)
+            if game == None:
+                update.message.reply_text(f"El partido con ID {id_game} no existe.")
+                return
+            elif game[4] != 1:
+                update.message.reply_text(f"El partido con ID {id_game} no está activo.")
+                return
+            else:
+                games_active.append(game)
+    # Si no se pasaron parametros, toma todos.        
+    else:
+        games_active = db.get_games_active()
+        
     for game in games_active:
         id_game = game[0]
-        players = get_players_game(id_game)
 
+        players = db.get_players_game(id_game)
         date_game = datetime.strptime(str(game[1]), '%Y-%m-%d')
         weekday = map_weekday_2[date_game.weekday()]
-        listado = f"{weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game[2])[:5]}hs de {game[3]}vs{game[3]} \n"
+        if len(players) > 0:
+            listado = f"{game[0]} - {weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game[2])[:5]}hs de {game[3]}vs{game[3]}\n"
 
-        for i, player in enumerate(players):
-            if player[3] == None:
-                listado += f'{i+1}. {player[1]} {player[2]} - {headline(player[4])} \n'
-            else:
-                listado += f'{i+1}. {player[3]} - {headline(player[4])} \n'
+            for i, player in enumerate(players):
+                if player[3] == None:
+                    listado += f'{i+1}. {player[1]} {player[2]} - {headline(player[4])} \n'
+                else:
+                    listado += f'{i+1}. {player[3]} - {headline(player[4])} \n'
+        else:
+            listado = f"No hay jugadores inscriptos para: {game[0]} - {weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game[2])[:5]}hs de {game[3]}vs{game[3]}. ID {game[0]}\n"
 
         update.message.reply_text(listado)
-
 
 def ban(update, context):
     args = context.args
 
+    if len(args) !=2:
+        update.message.reply_text('Deben enviarse dos parametros: \nUno con el ID del jugador a banear (/players para verlo)\nOtro con el codigo "dia.semanas" para especificar hasta cuando, ejemplo si es hasta el miercoles de la próxima semana, es "miercoles.1"')
+        return   
+
+
     id_player_ban = args[0]
-    split_cod = args[1].split('.')
+    player_ban_info = db.get_player_info(id_player_ban)
+    try:
+        split_cod = args[1].split('.')
+    except:
+        update.message.reply_text('El segundo argumento sirve para especificar hasta cuando durará el ban, tiene el formato "dia.semanas"')
+        return   
 
     try:
         # partimos el código recibido
@@ -453,38 +391,256 @@ def ban(update, context):
             return   
     except:
         update.message.reply_text('Hubo un error en los parametros enviado, por favor chequear el uso de la función con "/ban info"')
+        return
+
+    date_ban = calculate_date(split_cod[0].lower(),semanas)
+    
+    if player_ban_info[3]== None:
+        name_player_ban = f'{player_ban_info[1]} {player_ban_info[2]}'
+    else:
+        name_player_ban = player_ban_info[3]
+
+    poll_ban(update, context, id_player_ban, name_player_ban, date_ban)
 
 
-    date_ban = calculate_date_ban(split_cod[0].lower(),semanas)
-    date = date_ban.strftime("%Y-%m-%d")
-
-    ban_player(id_player_ban, date)
-
-
-def banplayer(update,context):
-    players = get_ban_players()
+def banplayers(update,context):
+    players = db.get_ban_players()
 
     if len(players) == 0:
         update.message.reply_text('No hay pĺayers baneados, que raro que no esté el Mati Care.')
+        return
     else:
         listado = 'El listado de baneados: \n'
         for i, player in enumerate(players):
+            date_ban = datetime.strptime(str(player[4]), '%Y-%m-%d')
+            
             if player[3] == None:
-                listado += f'{i+1}. {player[1]} {player[1]} \n'
+                listado += f'{i+1}. {player[1]} {player[1]} hasta {date_ban.strftime("%d/%m/%Y")} \n'
             else:
-                listado += f'{i+1}. {player[3]} \n'
+                listado += f'{i+1}. {player[3]} hasta {date_ban.strftime("%d/%m/%Y")}\n'
 
         update.message.reply_text(listado)
 
 def elimban(update,context):
     args = context.args
+    
+    if len(args) != 1:
+        update.message.reply_text('Para eliminar el ban de alguien, debes pasar el ID, con /players lo podés buscar.')
+        return
+    
     id_player = args[0]
 
-    player = down_ban(id_player)
-    update.message.reply_text(f'{player[1]} {player[2]} no está más baneado')
+    if int(id_player) == update.effective_user['id']:
+        update.message.reply_text('He!! mucha pilleza por acá, no podés eliminar tu propio ban!!')
+        return
+
+    player = db.down_ban(id_player)
+    update.message.reply_text(f"{update.effective_user.mention_html()} ya no estás baneado!",
+        parse_mode=ParseMode.HTML)
+
+
+def players(update, context):
+    players = db.get_players()
+
+
+    listado = 'Jugadores: \n'
+    for i, player in enumerate(players):
+        if player[3] == None:
+            if player[4] == None:
+                listado += f'{i+1}. {player[0]} - {player[1]} {player[2]} \n'
+            else:
+                date_ban = datetime.strptime(str(player[4]), '%Y-%m-%d')
+                listado += f"{i+1}. {player[0]} - {player[1]} {player[2]} - ban {date_ban.strftime('%d/%m/%Y')}  \n"
+        else:
+            if player[4] == None:
+                listado += f'{i+1}. {player[0]} - {player[3]} \n'
+            else:
+                date_ban = datetime.strptime(str(player[4]), '%Y-%m-%d')
+                listado += f"{i+1}. {player[0]} - {player[3]} - ban {date_ban.strftime('%d/%m/%Y')}\n"
+
+    update.message.reply_text(listado)
+        
+
+def alias(update, context):
+    args = context.args
+    alias = ' '.join(args)
+    id_user = update.effective_user['id']
+
+    db.set_alias(id_user, alias)
+
+    update.message.reply_text(f'Hola "{alias}"!, ya no te llamaremos por tu viejo  y aburrido nombre :D.')
+
+
+def poll_ban(update, context, id_player_ban, name_player_ban, date_ban):
+    
+    """Sends a predefined poll"""
+    questions = ["Si!", "Una oportunidad más.."]
+
+
+    chat_id = update.message.chat['id']
+    n_members = my_bot.get_chat_members_count(chat_id)
+    need_votes = calculate_need_votes(n_members)
+    message = context.bot.send_poll(
+        update.effective_chat.id,
+        f"VOTACIÓN: ban a {name_player_ban} hasta el {date_ban.strftime('%d/%m/%Y')}:\nSe necesitan {need_votes} votos.",
+        questions,
+        is_anonymous=False,
+        allows_multiple_answers=False,
+    )
+    # Save some info about the poll the bot_data for later use in receive_poll_answer
+    payload = {
+        message.poll.id: {
+            "type_poll": 'ban',
+            "need_votes": need_votes,
+            "questions": questions,
+            "message_id": message.message_id,
+            "chat_id": update.effective_chat.id,
+            "id_player_ban": id_player_ban,
+            "name_player_ban": name_player_ban,
+            "date_ban": date_ban,
+            "answers": 0,
+            "counter_answers": []
+        }
+    }
+    context.bot_data.update(payload)
+
+def receive_poll_answer(update, context):
+    """Summarize a users poll vote"""
+    answer = update.poll_answer
+    poll_id = answer.poll_id
+
+    chat_id = context.bot_data[poll_id]["chat_id"]
+    n_members = my_bot.get_chat_members_count(chat_id)
+
+    try:
+        questions = context.bot_data[poll_id]["questions"]
+    # this means this poll answer update is from an old poll, we can't do our answering then
+    except KeyError:
+        return
+    selected_options = answer.option_ids
+    
+    answer_string = ""
+    for question_id in selected_options:
+        if question_id != selected_options[-1]:
+            answer_string += questions[question_id] + " and "
+        else:
+            answer_string += questions[question_id]
+    context.bot.send_message(
+        chat_id,
+        f"{update.effective_user.mention_html()} dice: {answer_string}!",
+        parse_mode=ParseMode.HTML,
+    )
+
+    [context.bot_data[poll_id]["counter_answers"].append(option) for option in selected_options]
+    
+    context.bot_data[poll_id]["answers"] += 1
+    # Cerramos la votación cuando la mitad +1 votó
+    
+    need_votes = context.bot_data[poll_id]["need_votes"]
+    # if context.bot_data[poll_id]["answers"] == need_votes:
+    if context.bot_data[poll_id]["answers"] == 1:
+        context.bot.stop_poll(
+            context.bot_data[poll_id]["chat_id"], context.bot_data[poll_id]["message_id"]
+        )
+
+        end_votes = context.bot_data[poll_id]["counter_answers"]
+        name_player_ban = context.bot_data[poll_id]["name_player_ban"]
+        id_player_ban = context.bot_data[poll_id]["id_player_ban"]
+        date_ban = context.bot_data[poll_id]["date_ban"]
+        
+        if end_votes.count(0) > end_votes.count(1):
+            respuesta = f'¡¡¡{name_player_ban}  BANEADO LINCE!!! Hasta el {date_ban.strftime("%d/%m/%Y")}'
+            player_ban_info = db.ban_player(id_player_ban, date_ban)
+        else:
+            respuesta = f'{name_player_ban} fiuu safaroli. Portate bien!!'
+    
+        context.bot.send_message(
+            chat_id,
+            respuesta,
+            # parse_mode=ParseMode.HTML,
+        )
+    
+def deannotate(update, context):
+    game = context.args
+    id_user = update.effective_user['id']
+
+    if game == []:
+        games_active = db.get_games_active()
+        if len(games_active) > 1:
+            update.message.reply_text(f'Hay más de un partido activo, por favor especifica a qué partido te querés desanotar.')
+            return
+        else:
+            id_game = games_active[0][0]
+    else:
+
+        try:
+            id_game = game[0]
+            try:
+                int(id_game)
+            except:
+                update.message.reply_text(f'El parámetro que le pases debe ser un ID de partido.')
+                return
+        except:
+            update.message.reply_text(f'Debes pasar el ID del partido que quieres desanotarte.')
+            return
+        if len(game)!= 1:
+            update.message.reply_text(f'Debes pasar únicamente el ID del partido que quieres desanotarte.')
+            return
+
+    try:
+        row_affected = db.deannotate_player(id_user, id_game)
+        if row_affected == 1:
+            update.message.reply_text(f'Te has desanotado del partido con ID {id_game}.')
+            
+        elif row_affected == 0:
+            update.message.reply_text(f'No estás anotado a ese partido')
+            return
+    except:
+        update.message.reply_text(f'Ha habido un error, verifica si el ID del partido es válido o si estabas anotado en ese partido.')
+        return
+
+    recent_sup_player = db.get_recent_sup_player(id_game)
+    if recent_sup_player == None:
+        return
+    else:
+        db.set_headline_1(recent_sup_player[0], id_game)
+        player_sup  = db.get_player_info(recent_sup_player[0])
+        if player_sup[3] == None:
+            name = f'{player_sup[1]} {player_sup[2]}'
+        else:
+            name = player_sup[3]
+
+        update.message.reply_text(f'{name} ha pasado de ser suplente a titular!')
 
 
 
+def deactivategame(update, context):
+    game = context.args
+
+    try:
+        id_game = game[0]
+        try:
+            int(id_game)
+        except:
+            update.message.reply_text(f'El parámetro que le pases debe ser un ID de partido.')
+    except:
+        update.message.reply_text(f'Debes pasar el ID del partido que quieres desactivar.')
+        return
+    if len(game)!= 1:
+        update.message.reply_text(f'Debes pasar únicamente el ID del partido que quieres desactivar.')
+        return
+
+    try:
+        row_affected = db.deactivate_game(id_game)
+        if row_affected == 1:
+            update.message.reply_text(f'Se ha desactivado el partido con ID {id_game}.')
+            return
+        elif row_affected == 0:
+            update.message.reply_text(f'No existe un partido con ese ID')
+            return
+    except:
+        update.message.reply_text(f'Ha habido un error, verifica si el ID del partido es válido.')
+        return
 
 
 
@@ -521,84 +677,15 @@ def input_text(update,context):
 
     return ConversationHandler.END
 
-# Ejemplo de encuesta!!
-def poll(update, context):
-    """Sends a predefined poll"""
-    questions = ["5 fechas, merecidisimas", "3 fechas, la próxima 5", "1 fecha, solo para que aprenda", "Última oportunidad"]
-    message = context.bot.send_poll(
-        update.effective_chat.id,
-        "Cuantas fechas lo baneamos?",
-        questions,
-        is_anonymous=False,
-        allows_multiple_answers=False,
-    )
-    # Save some info about the poll the bot_data for later use in receive_poll_answer
-    payload = {
-        message.poll.id: {
-            "questions": questions,
-            "message_id": message.message_id,
-            "chat_id": update.effective_chat.id,
-            "answers": 0,
-        }
-    }
-    context.bot_data.update(payload)
-
-
-def receive_poll_answer(update, context):
-    """Summarize a users poll vote"""
-    answer = update.poll_answer
-    poll_id = answer.poll_id
-    
-    print(context.bot_data[poll_id])
-    try:
-        questions = context.bot_data[poll_id]["questions"]
-    # this means this poll answer update is from an old poll, we can't do our answering then
-    except KeyError:
-        return
-    selected_options = answer.option_ids
-    
-    answer_string = ""
-    for question_id in selected_options:
-        if question_id != selected_options[-1]:
-            answer_string += questions[question_id] + " and "
-        else:
-            answer_string += questions[question_id]
-    context.bot.send_message(
-        context.bot_data[poll_id]["chat_id"],
-        f"{update.effective_user.mention_html()} dice: {answer_string}!",
-        parse_mode=ParseMode.HTML,
-    )
-    
-    context.bot_data[poll_id]["answers"] += 1
-    # Close poll after three participants voted
-    if context.bot_data[poll_id]["answers"] == 1:
-        context.bot.stop_poll(
-            context.bot_data[poll_id]["chat_id"], context.bot_data[poll_id]["message_id"]
-        )
-    
-
-
-def receive_poll(update, _):
-    """On receiving polls, reply to it by a closed poll copying the received poll"""
-    actual_poll = update.effective_message.poll
-    # Only need to set the question and options, since all other parameters don't matter for
-    # a closed poll
-    update.effective_message.reply_poll(
-        question=actual_poll.question,
-        options=[o.text for o in actual_poll.options],
-        # with is_closed true, the poll/quiz is immediately closed
-        is_closed=True,
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
 # pruebas
 def prueba_gets(update,context):
     args = context.args
-    print(args)
     chat_id = update.message.chat['id']
     user_id = update.effective_user['id']
     user = my_bot.get_chat_members_count(chat_id)
-    print(user)
+    print(db.get_recent_sup_player(args[0]))
+    # print(update)
+    # poll_ban(update, context, 'algo','noimporta')
 
 # obtenemos información de nuestro bot
 if __name__ == "__main__":
@@ -620,18 +707,21 @@ if __name__ == "__main__":
     dp.add_handler(CommandHandler("annotate", annotate))
     dp.add_handler(CommandHandler("annotated", annotated))
     dp.add_handler(CommandHandler("ban", ban))
-    dp.add_handler(CommandHandler("banplayer", banplayer))
+    dp.add_handler(CommandHandler("banplayers", banplayers))
     dp.add_handler(CommandHandler("elimban", elimban))
-
+    dp.add_handler(CommandHandler("players", players))
+    dp.add_handler(CommandHandler("alias", alias))
+    dp.add_handler(CommandHandler("deannotate", deannotate))
+    dp.add_handler(CommandHandler("deactivategame", deactivategame))
 
     dp.add_handler(CommandHandler("prueba_gets",prueba_gets))
     dp.add_handler(CallbackQueryHandler(pattern="getDateGame",callback=getDateGame))
     # dp.add_handler(CommandHandler(Filters.text,echo))
     
     # Poll:
-    dp.add_handler(CommandHandler('poll', poll))
+    # dp.add_handler(CommandHandler('poll', poll))
     dp.add_handler(PollAnswerHandler(receive_poll_answer))
-    dp.add_handler(MessageHandler(Filters.poll, receive_poll))
+    # dp.add_handler(MessageHandler(Filters.poll, receive_poll))
 
     dp.add_handler(ConversationHandler(
         entry_points=[
