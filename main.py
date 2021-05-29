@@ -12,6 +12,8 @@ import pytz
 import bbdd as db
 from math import ceil
 
+# TODO que cuando ingresan al grupo los anote en la tabla players.
+# TODO crear funcionalidad para cambiar el tipo de partido y adapte los jugadores a suplentes y titulares.
 # TODO crear funcionalidad para crear un jugador externo. idea tener una sequencia en la base de datos para crear esos id.
 # TODO crear funcionalidad parar inscribir y desinscribir otros jugadores ya inscriptos.
 # TODO Crear funcionalidad para cargar de que equipo fue cada jugador en un partido.
@@ -22,6 +24,9 @@ from math import ceil
 # TODO averiguar como hacer para largar mensajes automáticos y de este modo 2 cosas: que se habilite un partido automáticamente y que a la noche verifique baneados y partidos ya jugados los desactive.
 # TODO al final recordar hacer el listado de funciones en fatherbot
 # TODO agregar a cada funcion su "info" - Agregar emoticones si se puede!
+
+# No necesarias_
+# TODO poder desactivar jugadores? mmm o eliminar --> eso dejarlo al final si pinta. Pero eliminar seria mejor. Total despues cdo se inscriben a un partido los anota
 
 
 
@@ -128,24 +133,40 @@ def start(update, context):
     name = update.effective_user['first_name'] + ' ' + update.effective_user['last_name'] 
     logger.info(f'El usuario "{id_user} - {name}", ha iniciado una conversación')
 
+    player_info = db.get_player_info(id_user)
+    if player_info == None:
+        _insert_player(update, context)
+    elif player_info[3] != None:
+        name = player_info[3]
+
     update.message.reply_text(f"""
 Hola {name} yo soy tu bot:
 Los comandos disponibles son: 
-    /creategame para crear un nuevo partido.
-    /games para ver los partidos disponibles.
-
-Si tienes dudas de como utilizarlos escribe "/comando info" o "/comando i" para más información.
+    /start ver el listado de comandos
+    /creategame crear un nuevo partido
+    /deactivategame desactivar un partido activo
+    /games ver los partidos disponibles
+    /annotate anotarte a un partido
+    /annotated ver los anotados a un partido
+    /deannotate desanotarte de un partido
+    /alias cambiar el nombre en el que apareces en las listas
+    /players ver el listado de jugadores y sus ID
+    /ban banear a un jugador
+    /banplayers ver el listado de jugadores baneados
+    /elimban eliminar el ban de un jugador
+Si tenés dudas de como utilizarlos escribí "/comando info" o "/comando i" para más información.
     """)
 
 def creategame(update, context):
     if 'info' in context.args or 'i' in context.args:
-        update.message.reply_text("""Para crear un partido debes seguir la siguiente estructura:
+        update.message.reply_text("""Para crear un partido el parametro tiene que seguir la estructura:
         dia\.semanas\.horario\.jugadores\_por\_equipo\. 
         Donde:
         \- *dia*: el día escrito con 3 letras, por ejemplo mie, jue, sab, o el nombre completo del día\.
         \- *semanas*: la cantidad de semanas que deben pasar, 0 hace referencia a la semana actual, 1 a la semana que viene y asi\.
         \- *horario*: un número de 0 a 24\.
-        \- *jugadores\_por\_equipo*: puede ser 5,6,7,8,9,11\.""",parse_mode='MarkdownV2')
+        \- *jugadores\_por\_equipo*: puede ser 5,6,7,8,9,11\.
+        Ejemplo: proximo martes a las 19hs de 7vs7 : mar\.1\.19\.7""",parse_mode='MarkdownV2')
         return
 
 
@@ -213,8 +234,7 @@ def creategame(update, context):
 
 def games(update, context):
     if 'info' in context.args or 'i' in context.args:
-        update.message.reply_text("""Con este comando verás el listado de los partidos creados y disponibles para anotarse\.
-Aparecerá el ID, que es importante cuando hay más de un partido activo ya que tendrás que especificarlo al anotarte\.""",parse_mode='MarkdownV2')
+        update.message.reply_text("""Con este comando verás el listado de los partidos creados y disponibles para anotarse\. Aparecerá el ID, que es importante cuando hay más de un partido activo ya que tendrás que especificarlo al anotarte\.""",parse_mode='MarkdownV2')
         return
 
     games_active = db.get_games_active()
@@ -242,6 +262,9 @@ def _insert_player(update, context):
     db.insert_new_player(id_user,first_name,last_name)
 
 def annotate(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Si hay solo 1 partido activo no debes pasar ningún parametro, si hay varios partidos activos, deberás pasar el número ID del partido, chequealo con /games.""")
+        return
     args = context.args
 
     id_user = update.effective_user['id']
@@ -258,6 +281,13 @@ def annotate(update, context):
     if len(args) == 1:
         # try:
         id_game = args[0]
+
+        try:
+            int(id_game)
+        except:
+            update.message.reply_text(f'El ID del partido es un número, consultalo en /games (mostrará los partidos activos).')
+            return
+
         game_info = db.get_game_info(id_game)
 
         if game_info == None:
@@ -316,7 +346,9 @@ def annotate(update, context):
     update.message.reply_text(f"{update.effective_user.mention_html()} se ha anotado al partido del {weekday.capitalize()} {date_game.strftime('%d/%m/%Y')} {str(game_info[2])[:5]}hs como {headline_long(headline)}!",parse_mode=ParseMode.HTML)
 
 def annotated(update, context):
-    
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Para anotarte al fulbo. Podrás ver la lista de jugadores anotados a los partidos, si pasas el ID del partido solo verás los anotados en ese partido. Consulta el id en /games""")
+        return    
     id_games = context.args
     if id_games != []:
         try:
@@ -362,6 +394,18 @@ def annotated(update, context):
         update.message.reply_text(listado)
 
 def ban(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Tenés que pasar el ID del jugador HDP que no va al partido y querés banear, consultalo en /players\. 
+Además debes pasar un código dia\.semanas, donde:
+        \- *dia*: el día escrito con 3 letras, por ejemplo mie, jue, sab, o el nombre completo del día\.
+        \- *semanas*: la cantidad de semanas que deben pasar, 0 hace referencia a la semana actual, 1 a la semana que viene y asi\.
+Se abrirá una votación en el que deberán votar la mitad\+1 de las personas del grupo\.""",parse_mode='MarkdownV2')
+        return
+    chat_id = update.message.chat['id']
+    if chat_id < 0:
+        update.message.reply_text('Para banear debes hacerlo en el chat de grupo para que se haga una votación.')
+        return
+
     args = context.args
 
     if len(args) !=2:
@@ -371,11 +415,16 @@ def ban(update, context):
 
     id_player_ban = args[0]
     player_ban_info = db.get_player_info(id_player_ban)
+
+    if player_ban_info == None:
+        update.message.reply_text(f'No existe el ID de jugador {id_player_ban}')
+        return   
+
     try:
         split_cod = args[1].split('.')
     except:
         update.message.reply_text('El segundo argumento sirve para especificar hasta cuando durará el ban, tiene el formato "dia.semanas"')
-        return   
+        return
 
     try:
         # partimos el código recibido
@@ -404,6 +453,9 @@ def ban(update, context):
 
 
 def banplayers(update,context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Aparecerá el listado de las personas baneadas, probablemente esté el Mati Care""")
+        return
     players = db.get_ban_players()
 
     if len(players) == 0:
@@ -422,6 +474,9 @@ def banplayers(update,context):
         update.message.reply_text(listado)
 
 def elimban(update,context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Para eliminar el ban, hay que pasar el id de la persona baneada. Consulta el ID en /banplayers""")
+        return
     args = context.args
     
     if len(args) != 1:
@@ -440,6 +495,9 @@ def elimban(update,context):
 
 
 def players(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Listado de jugadores y sus ID, si nunca te anotaste a un partido, o no cambiaste tu alias, o no ejecutaste el comando start, tal vez no aparezcas en este listado.""")
+        return
     players = db.get_players()
 
 
@@ -462,11 +520,24 @@ def players(update, context):
         
 
 def alias(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Para cambiar el nombre con el que te anotas a los partidos. Tenes que escribir /alias TUALIAS""")
+        return
     args = context.args
+    if len(args) == 0:
+        update.message.reply_text('Acordate de escribir el nuevo alias!!')
+        return
+
     alias = ' '.join(args)
     id_user = update.effective_user['id']
 
+    try:
+        _insert_player(update,context)
+    except:
+        pass
+
     db.set_alias(id_user, alias)
+        
 
     update.message.reply_text(f'Hola "{alias}"!, ya no te llamaremos por tu viejo  y aburrido nombre :D.')
 
@@ -537,8 +608,8 @@ def receive_poll_answer(update, context):
     # Cerramos la votación cuando la mitad +1 votó
     
     need_votes = context.bot_data[poll_id]["need_votes"]
-    # if context.bot_data[poll_id]["answers"] == need_votes:
-    if context.bot_data[poll_id]["answers"] == 1:
+    if context.bot_data[poll_id]["answers"] == need_votes:
+    # if context.bot_data[poll_id]["answers"] == 1:
         context.bot.stop_poll(
             context.bot_data[poll_id]["chat_id"], context.bot_data[poll_id]["message_id"]
         )
@@ -561,6 +632,9 @@ def receive_poll_answer(update, context):
         )
     
 def deannotate(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Para desanotarte del fulbo, si solo hay 1 partido activo, no hace falta que pases un ID de partido, sino chequearlo en /games.""")
+        return
     game = context.args
     id_user = update.effective_user['id']
 
@@ -615,6 +689,10 @@ def deannotate(update, context):
 
 
 def deactivategame(update, context):
+    if 'info' in context.args or 'i' in context.args:
+        update.message.reply_text("""Para desactivar un partido, cuando ya se jugo el partido por ejemplo.
+En caso de que solo haya 1 partido, se desactivará, sino te pedirá el ID, consultalo en /games.""")
+        return
     game = context.args
 
     try:
@@ -700,10 +778,10 @@ if __name__ == "__main__":
     dp = updater.dispatcher
 
     # creamos los manejadores
+    dp.add_handler(CommandHandler("_insert_player", _insert_player))
     dp.add_handler(CommandHandler("start",start))
     dp.add_handler(CommandHandler("creategame",creategame))
     dp.add_handler(CommandHandler("games",games))
-    dp.add_handler(CommandHandler("_insert_player", _insert_player))
     dp.add_handler(CommandHandler("annotate", annotate))
     dp.add_handler(CommandHandler("annotated", annotated))
     dp.add_handler(CommandHandler("ban", ban))
