@@ -38,6 +38,8 @@ logger = logging.getLogger()
 # leemos las variables de entorno
 TOKEN = os.getenv("TOKEN")
 MODE = os.getenv("MODE")
+CHAT_ID = "1449679092"
+
 
 if MODE == 'dev':
     # Acceso local (desarrollo)
@@ -173,7 +175,8 @@ def creategame(update, context):
     ref_date_games = context.args
 
     if len(ref_date_games) == 0:
-        update.message.reply_text("Decime cuando es el partido para poder crearlo!. Escribe '/creategame info' para saber como.")
+        update.message.reply_text("Decime cuando es el partido para poder crearlo!. Escribí '/creategame info' para saber como.")
+        return 
 
     for ref_date_game in ref_date_games:
         try:
@@ -765,8 +768,193 @@ def prueba_gets(update,context):
     # print(update)
     # poll_ban(update, context, 'algo','noimporta')
 
-# obtenemos información de nuestro bot
+
+
+
+def scheduledgames(update, context):
+    all_jobs = schedule.get_jobs()
+    # update.reply_text()
+    for job in all_jobs:
+        print(job.tags)
+        print(job.tag)
+
+
+import threading  
+import schedule
+import time
+
+def _start(chat_id,my_bot):
+# def _start():
+    # print("ejecutando")
+    my_bot.send_message(chat_id, "Es un mensaje de la nada!"
+    # f"{update.effective_user.mention_html()} dice: {answer_string}!",
+    # parse_mode=ParseMode.HTML,
+    )
+    return schedule.CancelJob
+
+def create_program_game(date_new_game,time,weekday,n_jugadores, chat_id, my_bot):
+
+    date = date_new_game.strftime("%Y-%m-%d")
+    try:
+        db.insert_new_game(date, time, n_jugadores)
+        my_bot.send_message(chat_id, f"Se ha creado un partido automáticamente el día {weekday.capitalize()} de {n_jugadores}vs{n_jugadores} {date_new_game.strftime('%d/%m/%Y')} a las {time[:5]}hs!")
+    except:
+        my_bot.send_message(chat_id,'Hubo algún error al crear el partido automáticamente!!')
+
+
+def create_game_beetwen_minutes_recurrente(from_minute,until_minute,date_new_game,time,weekday,n_jugadores,chat_id):
+    schedule.every(from_minute).to(until_minute).minutes.do(create_program_game,date_new_game,time,weekday,n_jugadores, chat_id, telegram.Bot(token=TOKEN))
+    
+def create_game_beetwen_minutes_no_recurrente(from_minute,until_minute,date_new_game,time,weekday,n_jugadores,chat_id):
+    schedule.every(from_minute).to(until_minute).minutes.do(create_program_game,date_new_game,time,weekday,n_jugadores, chat_id, telegram.Bot(token=TOKEN))
+    return schedule.CancelJob
+
+def randomcreategame(update,context):
+    # schedule.every().sunday.at("18:59").do(_start,"1449679092", telegram.Bot(token=TOKEN))
+    ref_program_schedule_dategame = context.args
+
+    if len(ref_program_schedule_dategame) == 0:
+        update.message.reply_text("Dame el código para programar el lanzamiento de un partido!. Escribe '/randomcreategame info' para saber como.")
+        return
+    if len(ref_program_schedule_dategame) != 2:
+        update.message.reply_text("Primero pasa cuando se creará el partido, luego cuando será el partido. Escribe '/randomcreategame info' para saber como.")
+        return
+
+    ref_program_schedule = ref_program_schedule_dategame[0]
+
+    # mie.20.60.r
+    try:
+        # partimos el código recibido
+        split_cod = ref_program_schedule.split('.')
+        # verificamos dia de la semana enviado
+        week_day_program = split_cod[0].lower()
+        if week_day_program not in map_weekday:
+            update.message.reply_text('No entiendo a que día de la semana te estás refiriendo.')
+            return
+        try:
+            horario_program = int(split_cod[1])
+            if horario_program in (range(0,25)):
+                horario_program = str(horario_program).rjust(2,"0")
+            else:
+                update.message.reply_text('El horario de la creación del partido debe ser un número entre 0 y 24.')
+                return
+        except:
+            update.message.reply_text('El horario debe ser un número entre 0 y 24.')
+            return
+        try:
+            minutos = int(split_cod[2])
+        except:
+            update.message.reply_text('La cantidad de minutos máximos hasta cuando se programará la creación del partido debe ser un número entero.')
+            return
+
+        try:
+            if split_cod[3].lower()=='r':
+                recurrencia = True
+            else:
+                recurrencia = False
+        except:
+            recurrencia = False
+    
+    except:
+        update.message.reply_text("""¡No seas TAN humano y enviame bien el código para la programación de la creación del partido!
+        Recordar el formato: dia.horario.minutos.recurrencia(opcional)
+        Por ejemplo, si quiero que se cree el miercoles a las 20 y en un minuto aleatorio hasta las 21: mie.20.60.
+        Además si quiero que quede fijo todos los miercoles hago: mie.20.60.r""")
+        return    
+
+
+    ref_date_game = ref_program_schedule_dategame[1]
+    try:
+        # partimos el código recibido
+        split_cod = ref_date_game.split('.')
+        # verificamos dia de la semana enviado
+        if split_cod[0].lower() not in map_weekday:
+            update.message.reply_text('No entiendo a que día de la semana te estás refiriendo.')
+            return
+        # Verificamos las semanas.
+        try:
+            semanas = int(split_cod[1])
+        except:
+            update.message.reply_text('La cantidad de semanas debe ser un número entero.')
+            return
+        # Verificamos el horario
+        try:
+            horario = int(split_cod[2])
+            if horario in (range(0,25)):
+                horario = str(horario).rjust(2,"0")
+            else:
+                update.message.reply_text('El horario del partido debe ser un número entre 0 y 24.')
+                return
+        except:
+            update.message.reply_text('El horario debe ser un número entre 0 y 24.')
+            return
+        # verificamos el tipo de partido
+        try:
+            n_jugadores = int(split_cod[3])
+            if n_jugadores not in (5,6,7,8,9,11):
+                update.message.reply_text('El número de jugadores por partido puede ser de 5, 6, 7, 8, 9, 11.')   
+                return
+        
+        except:
+            update.message.reply_text('La cantidad de jugadores por partido debe ser un número.')
+            return 
+
+        date_new_game = calculate_date(split_cod[0].lower(),semanas)
+
+        if date_new_game == False:
+            update.message.reply_text('Estás creando un partido en una fecha que ya paso!. Intenta de nuevo.')
+            return
+
+    except:
+        update.message.reply_text("""¡No seas TAN humano y enviame bien el código para la creación del partido!
+        Recordar el formato: dia.semanas.horario.tipo_de_partido
+        Por ejemplo, para un partido de 5v5 del martes de esta semana a las 21 es: /creategame mar.0.21.5""")
+        return
+
+    date = date_new_game.strftime("%Y-%m-%d")
+    time = horario + ":00:00"
+    weekday = map_weekday_2[date_new_game.weekday()]
+    
+    num_day = map_weekday[week_day_program]
+    if recurrencia == True:
+        if num_day == 0:
+            schedule.every().monday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 1:
+            schedule.every().tuesday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 2:
+            schedule.every().wednesday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 3:
+            schedule.every().thursday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 4:
+            schedule.every().friday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 5:
+            schedule.every().saturday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+        if num_day == 6:
+            schedule.every().sunday.at(f"21:56").do(create_game_beetwen_minutes_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+    else:
+        if num_day == 0:
+            schedule.every().monday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 1:
+            schedule.every().tuesday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 2:
+            schedule.every().wednesday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 3:
+            schedule.every().thursday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 4:
+            schedule.every().friday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 5:
+            schedule.every().saturday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'no recurrente')
+        if num_day == 6:
+            schedule.every().sunday.at(f"{horario_program}:00").do(create_game_beetwen_minutes_no_recurrente,0,minutos,date_new_game,time,weekday,n_jugadores,CHAT_ID).tag(map_weekday_2[num_day],horario_program,str(minutos),date,time,weekday,n_jugadores, 'recurrente')
+
+
+def scheduler():   
+    while True:   
+        schedule.run_pending()
+        time.sleep(1)
+
 if __name__ == "__main__":
+    threading.Thread(target=scheduler).start()
     my_bot=telegram.Bot(token=TOKEN)
     # print(my_bot.getMe())
     print("BOT CARGADO")
@@ -791,8 +979,12 @@ if __name__ == "__main__":
     dp.add_handler(CommandHandler("alias", alias))
     dp.add_handler(CommandHandler("deannotate", deannotate))
     dp.add_handler(CommandHandler("deactivategame", deactivategame))
+    dp.add_handler(CommandHandler("scheduledgames", scheduledgames))
+    dp.add_handler(CommandHandler("randomcreategame", randomcreategame))
 
     dp.add_handler(CommandHandler("prueba_gets",prueba_gets))
+
+
     dp.add_handler(CallbackQueryHandler(pattern="getDateGame",callback=getDateGame))
     # dp.add_handler(CommandHandler(Filters.text,echo))
     
@@ -811,6 +1003,7 @@ if __name__ == "__main__":
     ))
 
 
+    logger.info(f'Se ha iniciado el bot a la hora: {datetime.now()}')
     run(updater)
 
 
